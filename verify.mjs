@@ -25,11 +25,35 @@ const ok = m => console.log('  OK   ' + m);
 const bad = m => { console.log('  FAIL ' + m); fails++; };
 
 const missing = [];
+// ラリーのモック。RALLY=off で「関数が無い」状態、on で正常応答、bad で壊れた応答を返す。
+let RALLY = process.env.RALLY || 'off';
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml' };
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/api/rally')) {
+    if (RALLY === 'off') { res.writeHead(404); return res.end(); }
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, ready: true }));
+    }
+    let body = '';
+    req.on('data', c => body += c);
+    return req.on('end', () => {
+      const kind = JSON.parse(body || '{}').kind;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (RALLY === 'bad') {
+        // 規則に反する問い（「なぜ」を重ねている）→ 使わずに素通りするのが正しい
+        return res.end(JSON.stringify(kind === 'type'
+          ? { model: 'mock', type: null } : { model: 'mock', q: 'なぜそれが気になったの？', raw: 'なぜ…' }));
+      }
+      res.end(JSON.stringify(kind === 'type'
+        ? { model: 'mock', type: 'texture', why: '手触りの話' }
+        : { model: 'mock', q: 'さっき言ってた「ぬるっと」はどんな感じ？' }));
+    });
+  }
   const f = path.join(DIR, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
   if (!fs.existsSync(f) || fs.statSync(f).isDirectory()) {
-    missing.push(req.url); res.writeHead(404); return res.end();
+    if (!req.url.startsWith('/api/')) missing.push(req.url);
+    res.writeHead(404); return res.end();
   }
   res.writeHead(200, { 'content-type': MIME[path.extname(f)] || 'application/octet-stream' });
   fs.createReadStream(f).pipe(res);
@@ -50,12 +74,18 @@ await ctx.addInitScript(() => {
 });
 const page = await ctx.newPage();
 const errors = [];
+const expected = u => u.includes('/api/rally') && RALLY === 'off';   // 無いことを確かめている
 page.on('pageerror', e => errors.push(String(e)));
-page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-page.on('requestfailed', r => errors.push('requestfailed ' + r.url()));
-page.on('response', r => { if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`); });
+page.on('console', m => {
+  if (m.type() !== 'error') return;
+  const u = (m.location() && m.location().url) || '';
+  if (expected(u) || /api\/rally/.test(u) || /api\/rally/.test(m.text())) return;
+  errors.push(m.text() + (u ? ' <' + u + '>' : ''));
+});
+page.on('requestfailed', r => { if (!expected(r.url())) errors.push('requestfailed ' + r.url()); });
+page.on('response', r => { if (r.status() >= 400 && !expected(r.url())) errors.push(`${r.status()} ${r.url()}`); });
 
-console.log('########## 1. ページが読める ##########');
+console.log(`########## 1. ページが読める（ラリー=${RALLY}）##########`);
 await page.goto(base);
 await page.waitForSelector('#start');
 await page.waitForTimeout(400);
@@ -74,6 +104,16 @@ console.log('\n########## 2. 撮影 → 問い → もう1ターン ##########')
   if (!m.ichiban) ok('お題に「一番〜」が無い'); else bad('お題に「一番〜」が残っている');
   const fu = await page.evaluate(() => import('./engine.js').then(x => x.FOLLOW_UP_SHOT_S));
   if (fu === 60) ok('2枚目の待ちは60秒（60分枠に合わせた）'); else bad('2枚目の待ちが60秒でない：' + fu);
+}
+if (RALLY !== 'off') {
+  await page.waitForSelector('#rallyRow:visible', { timeout: 5000 });
+  ok('ラリーが使える環境だと最初の画面に切り替えが出る');
+  await page.click('#rallyToggle');
+  const label = await page.textContent('#rallyToggle');
+  if (label.includes('オン')) ok('ラリーをオンにできる'); else bad('オンにならない：' + label);
+} else {
+  const shown = await page.$eval('#rallyRow', el => el.style.display !== 'none');
+  if (!shown) ok('ラリーが使えない環境では切り替えを出さない'); else bad('切り替えが出ている');
 }
 await page.click('#start');
 await page.waitForSelector('#capture.on', { timeout: 5000 });
@@ -110,13 +150,30 @@ if (qs[0].includes('まず一言') && qs[1].includes('目に入った') && qs[2]
   ok('A の3問が順に出た：分類 → 気づき → 理由');
 else bad('A の問いの並びが違う：' + JSON.stringify(qs));
 
-// もう1ターン：チップ → 促し → 2枚目 → 1問
-await page.waitForSelector('#chips.on', { timeout: 10000 });
-ok('「なぜ」の後にチップが出た');
-await page.click('[data-t="compare"]');
-await page.waitForSelector('#suggestBox:visible', { timeout: 10000 });
-const sug = await page.textContent('#suggestText');
-if (sug.includes('2つ一緒')) ok('選んだ型の促しが出た：' + sug); else bad('促しが型と合っていない：' + sug);
+if (RALLY === 'on') {
+  // 理由の直後に、答えを受けた追い問いが1つ出る（D15）
+  const rq = await answerOne();
+  if (rq.includes('ぬるっと')) ok('理由の後にラリーの追い問いが出た：' + rq);
+  else bad('ラリーの問いが出ていない：' + rq);
+}
+
+// もう1ターン
+if (RALLY === 'on') {
+  // 型は音声から自動で決まるのでチップは出さない（60分の枠で1タップ削る）
+  await page.waitForSelector('#suggestBox:visible', { timeout: 15000 });
+  const chipsShown = await page.$eval('#chips', el => el.classList.contains('on'));
+  if (!chipsShown) ok('型が自動で決まり、チップを飛ばした'); else bad('チップが出てしまった');
+  const sug0 = await page.textContent('#suggestText');
+  if (sug0.includes('表面')) ok('自動で決めた型（手触り）の促しが出た：' + sug0);
+  else bad('自動判定の型と促しが合っていない：' + sug0);
+} else {
+  await page.waitForSelector('#chips.on', { timeout: 10000 });
+  ok('「なぜ」の後にチップが出た');
+  await page.click('[data-t="compare"]');
+  await page.waitForSelector('#suggestBox:visible', { timeout: 10000 });
+  const sug = await page.textContent('#suggestText');
+  if (sug.includes('2つ一緒')) ok('選んだ型の促しが出た：' + sug); else bad('促しが型と合っていない：' + sug);
+}
 await shoot('#shutter2');
 const g = await answerOne();
 if (g.includes('新しく分かった')) ok('2枚目の後に1問だけ聞いた：' + g); else bad('2枚目の問いが違う：' + g);
@@ -152,13 +209,33 @@ if (s.immediate_prompt === true) ok('immediate_prompt=true（保留ゲートを�
 else bad('immediate_prompt が true でない');
 if (first.prompt.question_set === 'A' && third.prompt.question_set === 'B') ok('A → B の交互割当');
 else bad('A/B の割当が違う: ' + [first, second, third].map(c => c.prompt.question_set).join(','));
-if (second.follow_up_of === first.capture_id && second.follow_up_type === 'compare'
+const wantType = RALLY === 'on' ? 'texture' : 'compare';
+if (second.follow_up_of === first.capture_id && second.follow_up_type === wantType
     && second.trigger === 'follow_up' && typeof second.follow_up_delay_s === 'number'
     && second.prompt.question_set === null) {
   ok(`2枚目に follow_up_of / type / delay_s（${second.follow_up_delay_s}秒）が入り、A/B は付かない`);
 } else bad('2枚目の記録が仕様どおりでない: ' + JSON.stringify(second).slice(0, 300));
 if (second.answers.length === 1 && second.answers[0].stage === 'follow_up_gain') ok('2枚目の答えは1問だけ');
 else bad('2枚目の答えの数が違う: ' + second.answers.length);
+if (RALLY === 'on') {
+  const ev = s.events.map(e => e.type);
+  if (s.rally_enabled === true) ok('rally_enabled=true が JSON に出る（解析で分けられる）');
+  else bad('rally_enabled が出ていない');
+  if (ev.includes('rally_question')) ok('生成した問いがイベントに残る');
+  else bad('rally_question が残っていない');
+  if (ev.includes('follow_up_auto_type')) ok('型の自動判定がイベントに残る');
+  else bad('follow_up_auto_type が残っていない');
+  const has = s.captures.some(c => c.answers.some(a => a.stage === 'rally'));
+  if (has) ok('ラリーの答えは stage=rally で保存され、A/B の段階と混ざらない');
+  else bad('stage=rally の答えが無い');
+}
+if (RALLY === 'bad') {
+  const ev = s.events.map(e => e.type);
+  if (ev.includes('rally_skipped')) ok('規則に反する問いは使わず、理由つきで飛ばす');
+  else bad('rally_skipped が残っていない');
+  const has = s.captures.some(c => c.answers.some(a => a.stage === 'rally'));
+  if (!has) ok('規則に反した問いは学生に出していない'); else bad('反した問いを出してしまった');
+}
 const types = s.events.map(e => e.type);
 for (const t of ['session_start', 'capture_meta', 'follow_up_suggested', 'follow_up_shot', 'session_end'])
   if (!types.includes(t)) bad(`イベント ${t} が出ていない`);

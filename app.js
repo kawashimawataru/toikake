@@ -10,6 +10,7 @@ import { CARD, MISSIONS, FREE, byId, categories } from './missions.js';
 import * as E from './engine.js';
 import { Store, exportSession } from './store.js';
 import { Meter } from './vad.js';
+import { Rally, isUsableQuestion, toWavBase64 } from './rally.js';
 
 const $ = id => document.getElementById(id);
 const show = id => {
@@ -58,6 +59,15 @@ function speak(text) {
 }
 
 // ---- 画面部品 ---------------------------------------------------------------
+/** 最初の画面に出すラリーの行。使えないときは何も出さない（学生に選ばせるものではない）。 */
+function renderRallyRow() {
+  const box = $('rallyRow');
+  if (!Rally.available) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  $('rallyToggle').textContent = Rally.on ? 'ラリー：オン' : 'ラリー：オフ';
+  $('rallyToggle').className = Rally.on ? 'btn' : 'btn sub';
+}
+
 function renderStatus() {
   const s = app.session;
   const shots = s ? s.captures.filter(c => !c.follow_up_of).length : 0;
@@ -121,11 +131,11 @@ function paintMeter(db) {
 //   ・累積 0.8 秒しゃべって、そのあと 2.5 秒黙ったら終了
 //   ・一言も出ないまま所定の秒数で切り上げ（no_response）
 //   ・本人が「話し終わった」を押したら、VAD が何と言っていても回答として保存する
-async function ask(stage, captureID, mission) {
-  const text = stage === 'hidden' ? mission.q3 : E.STAGE_TEXT[stage];
+async function ask(stage, captureID, mission, override) {
+  const text = override || (stage === 'hidden' ? mission.q3 : E.STAGE_TEXT[stage]);
   const lim = E.limitsFor(stage);
   $('stageLabel').textContent =
-    stage === 'hidden' ? `お題「${mission.name}」の質問` : E.STAGE_LABEL[stage];
+    stage === 'hidden' ? `お題「${mission.name}」の質問` : (E.STAGE_LABEL[stage] || stage);
   $('question').textContent = text;
   show('prompt');
 
@@ -203,7 +213,7 @@ async function ask(stage, captureID, mission) {
         `stage=${stage} vad_speech_s=${result.speechSeconds.toFixed(2)}` + (result.heard ? '' : ' vad_missed=true'));
     }
     await save();
-    return { kind: 'answered', speechSeconds: result.speechSeconds };
+    return { kind: 'answered', speechSeconds: result.speechSeconds, blob: result.blob };
   }
 
   if (app.dismissed) return { kind: 'dismissed' };
@@ -230,6 +240,12 @@ async function runCapture(capture, mission) {
     if (r.kind === 'answered') {
       answered = true; lastSpeech = r.speechSeconds;
       if (stage === 'describing') describingAnswered = true;
+      // ラリー：理由を聞いた直後に、その答えを受けて追い問いを1つだけ足す（D15）。
+      // 1回だけにするのは、「なぜ」を重ねると具体性が落ちるため（CHI 2025 / Kocielnik 2018）。
+      if (stage === 'understanding') {
+        app.lastWhyBlob = r.blob;
+        if (Rally.active) await runRally(capture.capture_id, mission, r.blob);
+      }
     } else {
       if (stage === 'classify') continue;      // 分類は飛ばしても本題へ進む
       if (!answered) break;                    // 本題の1問目に答えなければ打ち切り
@@ -242,18 +258,61 @@ async function runCapture(capture, mission) {
   return { answered, dismissed: app.dismissed };
 }
 
+// ---- ラリー（掘り下げ）------------------------------------------------------
+// 9/7 MTG の「対話型AIはプラスアルファ」。主軸のもう1ターンは触らない。
+// 生成に失敗しても、遅くても、問いが規則に反しても、何もせず次へ進む。
+
+async function runRally(captureID, mission, blob) {
+  const t0 = performance.now();
+  let wav = null;
+  try { wav = await toWavBase64(blob); } catch (e) {
+    log('rally_skipped', captureID, 'reason=wav_failed'); return;
+  }
+  const res = await Rally.call({ kind: 'rally', wav, mission: mission.name, stage: '理由' });
+  const ms = Math.round(performance.now() - t0);
+  if (res.error || !isUsableQuestion(res.q)) {
+    log('rally_skipped', captureID,
+      `reason=${res.error ? res.error : 'unusable'} ms=${ms}` + (res.raw ? ` raw=${res.raw}` : ''));
+    return;
+  }
+  log('rally_question', captureID, `ms=${ms} model=${res.model || '-'} q=${res.q}`);
+  // 生成した問いはその場で聞く。段階名は rally で、A/B の段階列には入れない。
+  await ask('rally', captureID, mission, res.q);
+  await save();
+}
+
 // ---- もう1ターン ------------------------------------------------------------
 // 「なぜ気になった？」の答えの後に、追加の記録を促す問いを1つ出す（9/7 MTG。主軸）。
 async function runFollowUp(baseID, mission) {
   app.followChoice = null; app.followSkip = false;
 
-  // 1. 何が気になったかを1タップで
-  renderChips();
-  show('chips');
-  const t0 = performance.now();
-  while (!app.followChoice && !app.followSkip) {
-    await sleep(100);
-    if ((performance.now() - t0) / 1000 >= E.FOLLOW_UP_CHOICE_S) break;
+  // 1a. ラリーが使えるときは、理由の答えの音声から型を決めてチップを飛ばす（D30）。
+  //     60分しかないので、1タップぶんでも削れるなら削る。失敗したらチップに戻る。
+  if (Rally.active && app.lastWhyBlob) {
+    const t0 = performance.now();
+    try {
+      const wav = await toWavBase64(app.lastWhyBlob);
+      const res = await Rally.call({ kind: 'type', wav,
+        types: E.FOLLOW_UP.map(f => f.type) });
+      const ms = Math.round(performance.now() - t0);
+      if (!res.error && res.type) {
+        app.followChoice = res.type;
+        log('follow_up_auto_type', baseID, `type=${res.type} ms=${ms} why=${res.why || ''}`);
+      } else {
+        log('follow_up_auto_failed', baseID, `reason=${res.error || 'none'} ms=${ms}`);
+      }
+    } catch (e) { log('follow_up_auto_failed', baseID, 'reason=wav_failed'); }
+  }
+
+  // 1b. 決まらなければ、これまでどおり一言チップを1タップで
+  if (!app.followChoice) {
+    renderChips();
+    show('chips');
+    const t0 = performance.now();
+    while (!app.followChoice && !app.followSkip) {
+      await sleep(100);
+      if ((performance.now() - t0) / 1000 >= E.FOLLOW_UP_CHOICE_S) break;
+    }
   }
   const base = app.session.captures.find(c => c.capture_id === baseID);
   if (app.followSkip) {
@@ -503,9 +562,12 @@ async function begin() {
     // E1 の母数から機械的に外せるように、必ず true で出す。
     immediate_prompt: true,
     on_device_transcription: false,
+    // ラリー（Gemini で追い問いを生成／もう1ターンの型を自動判定）を使った区間か。
+    // 使った写真は問いの出方が定型と違うので、解析では必ず分けること。
+    rally_enabled: Rally.active,
     captures: [], events: [],
   };
-  log('session_start', null, `app=web mime=${app.mime}`);
+  log('session_start', null, `app=web mime=${app.mime} rally=${Rally.active ? 'on' : 'off'}`);
   await save();
   renderStatus(); renderMission();
   clearInterval(app.clock);
@@ -531,6 +593,7 @@ async function endSession() {
   if (saved) $('pid').value = saved;
   $('pid').onchange = () => localStorage.setItem('participant_id', $('pid').value);
 
+  $('rallyToggle').onclick = () => { Rally.on = !Rally.on; renderRallyRow(); };
   $('start').onclick = begin;
   $('shutter').onclick = onShutter;
   $('shutter2').onclick = onFollowUpShutter;
@@ -549,6 +612,10 @@ async function endSession() {
   $('toReview').onclick = renderReview;
   $('backHome').onclick = () => show(app.session ? 'capture' : 'setup');
   $('export').onclick = doExport;
+
+  // ラリーが使えるかを1回だけ確かめる。関数が無い（GitHub Pages 側）／電波が無いなら自動でオフ。
+  await Rally.probe();
+  renderRallyRow();
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

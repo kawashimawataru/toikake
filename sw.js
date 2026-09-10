@@ -3,7 +3,7 @@
 const CACHE = 'toikake-v1';
 const SHELL = ['./', './index.html', './app.js', './engine.js', './vad.js',
                './store.js', './missions.js', './manifest.webmanifest',
-               './icon.svg', './icon-180.png'];
+               './rally.js', './icon.svg', './icon-180.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -15,6 +15,8 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  // ラリーの口はキャッシュしない。古い判定を返すと現場で混乱する。
+  if (e.request.url.includes('/api/')) return;
   // ネットがあれば新しいものを取り、無ければキャッシュを返す。
   e.respondWith(
     fetch(e.request)
