@@ -533,8 +533,42 @@ async function doExport() {
 }
 
 // ---- 起動 -------------------------------------------------------------------
-async function begin() {
+/** 終わっていない今日の記録を探す。Safari がページを捨てても続きから戻れるようにするため。 */
+async function findUnfinished() {
+  const all = await Store.allSessions();
+  const today = new Date().toDateString();
+  return all
+    .filter(s => !s.ended_at && new Date(s.started_at).toDateString() === today)
+    .sort((a, b) => (a.started_at < b.started_at ? 1 : -1))[0] || null;
+}
+
+function renderResumeRow(s) {
+  const box = $('resumeRow');
+  if (!s) { box.style.display = 'none'; return; }
+  const shots = s.captures.filter(c => !c.follow_up_of).length;
+  const min = Math.max(0, Math.floor((Date.now() - new Date(s.started_at)) / 60000));
+  box.style.display = '';
+  $('resumeText').textContent =
+    `途中の記録があります（${s.participant_id}・写真 ${shots}枚・${min}分前に開始）`;
+}
+
+/** 続きから。新しいセッションを作らずに、途中の記録に足していく。 */
+async function resume() {
+  const s = await findUnfinished();
+  if (!s) { renderResumeRow(null); return; }
+  if (!(await openMic())) return;
+  app.session = s;
+  log('session_resumed', null, `captures=${s.captures.length}`);
+  await save();
+  renderStatus(); renderMission();
+  startClock();
+  show('capture');
+}
+
+/** マイクと読み上げの準備。はじめる／続きから の両方から呼ぶ。 */
+async function openMic() {
   $('setupErr').textContent = '';
+  if (app.stream) return true;
   try {
     // マイクは最初の1回だけ許可を取り、記録の間はつないだままにする。
     // 写真を撮って戻ってくるたびに取り直すと、iOS Safari では
@@ -542,7 +576,7 @@ async function begin() {
     app.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (e) {
     $('setupErr').textContent = 'マイクが使えません。Safari の設定でマイクを許可してください。';
-    return;
+    return false;
   }
   for (const m of ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']) {
     if (MediaRecorder.isTypeSupported(m)) { app.mime = m; app.ext = m.startsWith('audio/mp4') ? 'm4a' : 'webm'; break; }
@@ -551,6 +585,16 @@ async function begin() {
   try { await app.meter.ctx.resume(); } catch (e) {}
   speak('');                                   // iOS の読み上げをこの操作で解錠する
   try { app.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  return true;
+}
+
+function startClock() {
+  clearInterval(app.clock);
+  app.clock = setInterval(() => { if ($('capture').classList.contains('on')) renderStatus(); }, 30000);
+}
+
+async function begin() {
+  if (!(await openMic())) return;
 
   app.session = {
     session_id: E.uuid(),
@@ -570,8 +614,7 @@ async function begin() {
   log('session_start', null, `app=web mime=${app.mime} rally=${Rally.active ? 'on' : 'off'}`);
   await save();
   renderStatus(); renderMission();
-  clearInterval(app.clock);
-  app.clock = setInterval(() => { if ($('capture').classList.contains('on')) renderStatus(); }, 30000);
+  startClock();
   show('capture');
 }
 
@@ -595,6 +638,8 @@ async function endSession() {
 
   $('rallyToggle').onclick = () => { Rally.on = !Rally.on; renderRallyRow(); };
   $('start').onclick = begin;
+  $('resume').onclick = resume;
+  renderResumeRow(await findUnfinished());
   $('shutter').onclick = onShutter;
   $('shutter2').onclick = onFollowUpShutter;
   $('skipShot').onclick = () => { app.followSkip = true; };

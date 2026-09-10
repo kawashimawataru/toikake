@@ -117,6 +117,13 @@ td:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:800
   <select id="pid" class="field"></select>
   <p class="small muted" style="margin-top:14px">マイクは「話しているかどうか」の判定に使います。
   録音されるのは質問に答えている間だけで、それ以外の音は保存されません。</p>
+  <div id="resumeRow" style="display:none;margin-top:16px;border:2px solid var(--navy);border-radius:12px;padding:14px 16px">
+    <p style="margin:0 0 10px;font-weight:800" id="resumeText"></p>
+    <button id="resume" class="btn">続きから</button>
+    <p class="small muted" style="margin-top:8px">「はじめる」を押すと別の記録として新しく始まります。
+    同じ日の続きなら、こちらを押してください。</p>
+  </div>
+
   <div id="rallyRow" style="display:none;margin-top:14px;border-top:2px solid var(--line);padding-top:12px">
     <button id="rallyToggle" class="btn sub">ラリー：オフ</button>
     <p class="small muted" style="margin-top:8px">オンにすると、理由を答えた後にもう1つ質問が出ます。

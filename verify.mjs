@@ -196,6 +196,30 @@ if (after.includes('まず一言')) ok('「今はやめる」の後でも、次�
 else bad('やめた後に問いが出ない：' + after);
 await page.click('#skip');
 
+// 写真を撮って戻る間に Safari がページを捨てた状況。続きから戻れないと、
+// 60分の枠で押し直すたびに別セッションが増え、A/B の偶奇も最初からやり直しになる。
+console.log('\n########## 2b. 途中でページが落ちても続きから戻れるか ##########');
+const beforeShots = await page.evaluate(async () => {
+  const db = await new Promise(r => { const q = indexedDB.open('toikake'); q.onsuccess = () => r(q.result); });
+  const all = await new Promise(r => { const q = db.transaction('sessions').objectStore('sessions').getAll(); q.onsuccess = () => r(q.result); });
+  return all.filter(s => !s.ended_at).reduce((n, s) => n + s.captures.filter(c => !c.follow_up_of).length, 0);
+});
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForSelector('#start', { timeout: 10000 });
+const resumeShown = await page.$eval('#resumeRow', el => el.style.display !== 'none');
+if (resumeShown) ok('再読み込みしたら「続きから」が出た：' + (await page.textContent('#resumeText')));
+else bad('「続きから」が出ない（押し直すと別セッションになる）');
+await page.click('#resume');
+await page.waitForSelector('#capture.on', { timeout: 10000 });
+const afterShots = await page.evaluate(async () => {
+  const db = await new Promise(r => { const q = indexedDB.open('toikake'); q.onsuccess = () => r(q.result); });
+  const all = await new Promise(r => { const q = db.transaction('sessions').objectStore('sessions').getAll(); q.onsuccess = () => r(q.result); });
+  return { open: all.filter(s => !s.ended_at).length, total: all.length };
+});
+if (afterShots.open === 1) ok(`続きから戻って、記録は1つのまま（写真 ${beforeShots}枚を引き継いだ）`);
+else bad(`セッションが増えた：終わっていない記録が ${afterShots.open} 件`);
+lastQ = '';
+
 console.log('\n########## 3. 記録の中身 ##########');
 await page.waitForSelector('#capture.on', { timeout: 15000 });
 await page.click('#endSession');
