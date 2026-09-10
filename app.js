@@ -60,12 +60,15 @@ function speak(text) {
 // ---- 画面部品 ---------------------------------------------------------------
 function renderStatus() {
   const s = app.session;
-  const shots = s ? s.captures.length : 0;
+  const shots = s ? s.captures.filter(c => !c.follow_up_of).length : 0;
   const fu = s ? s.captures.filter(c => c.follow_up_of).length : 0;
+  // 3日目の磯採集は 8:00〜9:00 の60分しかない。経過が見えないとペースを配れない。
+  const min = s ? Math.floor((Date.now() - new Date(s.started_at)) / 60000) : 0;
   $('statusBar').innerHTML =
-    `<span class="chip">参加者 ${s ? s.participant_id : '-'}</span>` +
+    `<span class="chip">${s ? s.participant_id : '-'}</span>` +
     `<span class="chip">写真 ${shots}</span>` +
-    `<span class="chip${fu ? ' hot' : ''}">もう1枚 ${fu}</span>`;
+    `<span class="chip${fu ? ' hot' : ''}">もう1枚 ${fu}</span>` +
+    `<span class="chip">${min}分</span>`;
 }
 
 function renderMission() {
@@ -433,9 +436,19 @@ async function renderReview() {
       (c.follow_up_of ? `<span class="tag fu">もう1枚・${c.follow_up_type}</span>` : `<span class="tag">${c.prompt.question_set || 'A'}</span>`) +
       `<span class="tag">${(c.mission && c.mission.name) || '自由'}</span>` +
       (c.follow_up_declined ? '<span class="tag">2枚目なし</span>' : '');
-    const ans = c.answers.length
-      ? c.answers.map(a => `<p class="ans"><b>${E.STAGE_LABEL[a.stage] || a.stage}</b>　${a.duration_s}秒（声 ${a.vad_speech_s}秒）</p>`).join('')
-      : '<p class="ans muted">答えの録音なし</p>';
+    // 録音はその場で聞き返せるようにする。10:30 の「自分の取ったデータを参照して
+    // 干潟と磯を比較・発表」で本人が使うため（文字起こしは事後なので、ここでは音で返す）。
+    let ans = '<p class="ans muted">答えの録音なし</p>';
+    if (c.answers.length) {
+      const rows = [];
+      for (const a of c.answers) {
+        const ab = await Store.getBlob(a.audio);
+        const au = ab ? URL.createObjectURL(ab) : null;
+        rows.push(`<p class="ans"><b>${E.STAGE_LABEL[a.stage] || a.stage}</b>　${a.duration_s}秒</p>` +
+          (au ? `<audio controls preload="none" src="${au}"></audio>` : ''));
+      }
+      ans = rows.join('');
+    }
     parts.push(`<div class="card">${url ? `<img src="${url}" alt="">` : ''}${tags}${ans}</div>`);
   }
   $('reviewList').innerHTML = parts.join('');
@@ -495,6 +508,8 @@ async function begin() {
   log('session_start', null, `app=web mime=${app.mime}`);
   await save();
   renderStatus(); renderMission();
+  clearInterval(app.clock);
+  app.clock = setInterval(() => { if ($('capture').classList.contains('on')) renderStatus(); }, 30000);
   show('capture');
 }
 
@@ -502,6 +517,7 @@ async function endSession() {
   if (!app.session) return;
   app.session.ended_at = E.iso(Date.now());
   log('session_end', null, `captures=${app.session.captures.length}`);
+  clearInterval(app.clock);
   await save();
   try { if (app.wakeLock) await app.wakeLock.release(); } catch (e) {}
   await renderReview();

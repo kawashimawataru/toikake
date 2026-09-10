@@ -12,6 +12,96 @@ export const MISSIONS = [
   "active": true
  },
  {
+  "id": "S43",
+  "category": "海・生き物",
+  "area": "実験所周辺の磯",
+  "name": "いま採ったもの",
+  "task": "いま自分が採ったものを撮る",
+  "q3": "どこにいた？ どうやって見つけた？",
+  "points": 20,
+  "active": true
+ },
+ {
+  "id": "S42",
+  "category": "海・生き物",
+  "area": "実験所周辺の磯",
+  "name": "迷ってやめた",
+  "task": "採ろうか迷って、やめたものを撮る",
+  "q3": "なんでやめた？ 何が引っかかった？",
+  "points": 30,
+  "active": true
+ },
+ {
+  "id": "S41",
+  "category": "海・生き物",
+  "area": "実験所周辺の磯",
+  "name": "昨日と違う",
+  "task": "昨日の干潟と違うと思ったものを撮る",
+  "q3": "干潟では何だった？ どこが違う？",
+  "points": 30,
+  "active": true
+ },
+ {
+  "id": "S44",
+  "category": "海・生き物",
+  "area": "実験所周辺の磯",
+  "name": "水がひいた跡",
+  "task": "さっきまで水があった場所で、いま出ているものを撮る",
+  "q3": "水があったとき、どうなっていたと思う？",
+  "points": 30,
+  "active": true
+ },
+ {
+  "id": "M54",
+  "category": "感じる",
+  "area": "全域",
+  "name": "触って意外だった",
+  "task": "触ってみて、見た目と違うと思ったものを撮る",
+  "q3": "どんな手触り？ 見た目とどう違った？",
+  "points": 20,
+  "active": true
+ },
+ {
+  "id": "M7",
+  "category": "見る",
+  "area": "全域",
+  "name": "思ったより小さい／大きい",
+  "task": "思ったより小さい、または思ったより大きいと感じたものを撮る",
+  "q3": "実際の大きさはどれくらい？ 何と比べてそう思った？",
+  "points": 20,
+  "active": true
+ },
+ {
+  "id": "M4",
+  "category": "考える",
+  "area": "全域",
+  "name": "なぜここに",
+  "task": "「なぜこれがここにあるのか」分からないものを撮る",
+  "q3": "もし答えを予想するなら？",
+  "points": 30,
+  "active": true
+ },
+ {
+  "id": "M53",
+  "category": "感じる",
+  "area": "全域",
+  "name": "音が気になった",
+  "task": "音が気になった場所を撮る",
+  "q3": "どんな音？ 何の音だと思う？",
+  "points": 20,
+  "active": true
+ },
+ {
+  "id": "M52",
+  "category": "感じる",
+  "area": "全域",
+  "name": "匂いが気になった",
+  "task": "匂いが気になったものを撮る",
+  "q3": "どんな匂い？ 何の匂いだと思う？",
+  "points": 20,
+  "active": true
+ },
+ {
   "id": "M1",
   "category": "案内係",
   "area": "全域",
@@ -19,7 +109,7 @@ export const MISSIONS = [
   "task": "案内係が説明しなかったもので、気になったものを撮る",
   "q3": "案内係に聞くとしたら、何と聞く？",
   "points": 30,
-  "active": true
+  "active": false
  },
  {
   "id": "M2",
@@ -42,16 +132,6 @@ export const MISSIONS = [
   "active": false
  },
  {
-  "id": "M4",
-  "category": "考える",
-  "area": "全域",
-  "name": "なぜここに",
-  "task": "「なぜこれがここにあるのか」分からないものを撮る",
-  "q3": "もし答えを予想するなら？",
-  "points": 30,
-  "active": true
- },
- {
   "id": "M5",
   "category": "比べる",
   "area": "全域",
@@ -70,16 +150,6 @@ export const MISSIONS = [
   "q3": "何が同じで、何が違った？",
   "points": 20,
   "active": false
- },
- {
-  "id": "M7",
-  "category": "見る",
-  "area": "全域",
-  "name": "思ったより小さい／大きい",
-  "task": "思ったより小さい、または思ったより大きいと感じたものを撮る",
-  "q3": "実際の大きさはどれくらい？ 何と比べてそう思った？",
-  "points": 20,
-  "active": true
  },
  {
   "id": "M8",
@@ -529,7 +599,7 @@ export const MISSIONS = [
   "task": "岩の縞模様で、色や厚さが変わる境目を撮る",
   "q3": "上と下で何が違った？ どっちが先にできたと思う？",
   "points": 30,
-  "active": true
+  "active": false
  },
  {
   "id": "S2",
@@ -639,7 +709,7 @@ export const MISSIONS = [
   "task": "潮だまりで、動いているものを1つ見つけて撮る",
   "q3": "どう動いていた？ 何だと思う？",
   "points": 30,
-  "active": true
+  "active": false
  },
  {
   "id": "S13",
@@ -679,7 +749,7 @@ export const MISSIONS = [
   "task": "京大の水族館で、案内板を読む前に不思議だと思った生き物を撮る",
   "q3": "何が不思議だった？ 読んだ後、予想は合っていた？",
   "points": 30,
-  "active": true
+  "active": false
  },
  {
   "id": "S17",
@@ -789,7 +859,7 @@ export const MISSIONS = [
   "task": "波の音がよく聞こえる場所で、目を閉じて10秒聞いてから撮る",
   "q3": "目を閉じている間、何が聞こえた？",
   "points": 30,
-  "active": true
+  "active": false
  },
  {
   "id": "S28",
@@ -869,7 +939,7 @@ export const MISSIONS = [
   "task": "自分の研究テーマに近いと思うものを撮る",
   "q3": "どこが近い？ 研究に使えそう？",
   "points": 30,
-  "active": true
+  "active": false
  },
  {
   "id": "S36",
@@ -920,36 +990,6 @@ export const MISSIONS = [
   "q3": "その一言は？ なぜそれ？",
   "points": 20,
   "active": false
- },
- {
-  "id": "M52",
-  "category": "感じる",
-  "area": "全域",
-  "name": "匂いが気になった",
-  "task": "匂いが気になったものを撮る",
-  "q3": "どんな匂い？ 何の匂いだと思う？",
-  "points": 20,
-  "active": true
- },
- {
-  "id": "M53",
-  "category": "感じる",
-  "area": "全域",
-  "name": "音が気になった",
-  "task": "音が気になった場所を撮る",
-  "q3": "どんな音？ 何の音だと思う？",
-  "points": 20,
-  "active": true
- },
- {
-  "id": "M54",
-  "category": "感じる",
-  "area": "全域",
-  "name": "触って意外だった",
-  "task": "触ってみて、見た目と違うと思ったものを撮る",
-  "q3": "どんな手触り？ 見た目とどう違った？",
-  "points": 20,
-  "active": true
  },
  {
   "id": "M55",

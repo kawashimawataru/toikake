@@ -63,6 +63,18 @@ if (missing.length) bad('404 になったファイル: ' + missing.join(', '));
 if (errors.length) bad('読み込みでエラー:\n       ' + errors.join('\n       ')); else ok('index.html を読み込んでエラーなし');
 
 console.log('\n########## 2. 撮影 → 問い → もう1ターン ##########');
+{ // 3日目（磯採集）のカードになっているか
+  const m = await page.evaluate(() => import('./missions.js').then(x => ({
+    card: x.CARD.map(c => c.id), n: x.MISSIONS.length,
+    ichiban: JSON.stringify(x.MISSIONS).includes('一番'),
+  })));
+  const want = ['M0','S43','S42','S41','S44','M54','M7','M4','M53','M52'];
+  if (JSON.stringify(m.card) === JSON.stringify(want)) ok(`カードは3日目の磯むけ10本（${m.card.join(' ')}）`);
+  else bad('カードが違う：' + m.card.join(' '));
+  if (!m.ichiban) ok('お題に「一番〜」が無い'); else bad('お題に「一番〜」が残っている');
+  const fu = await page.evaluate(() => import('./engine.js').then(x => x.FOLLOW_UP_SHOT_S));
+  if (fu === 60) ok('2枚目の待ちは60秒（60分枠に合わせた）'); else bad('2枚目の待ちが60秒でない：' + fu);
+}
 await page.click('#start');
 await page.waitForSelector('#capture.on', { timeout: 5000 });
 ok('マイクを取って撮影画面に入った');
@@ -151,6 +163,12 @@ const types = s.events.map(e => e.type);
 for (const t of ['session_start', 'capture_meta', 'follow_up_suggested', 'follow_up_shot', 'session_end'])
   if (!types.includes(t)) bad(`イベント ${t} が出ていない`);
 if (types.includes('follow_up_suggested') && types.includes('follow_up_shot')) ok('もう1ターンのイベントが時系列に残る');
+
+// 10:30 の「自分の取ったデータを参照して比較・発表」で本人が聞き返せること
+const players = await page.$$eval('#reviewList audio', els => els.length);
+if (players > 0) ok(`振り返りで録音を再生できる（${players}件）`); else bad('振り返りに再生が無い');
+const chips = await page.$eval('#statusBar', el => el.textContent);
+if (/\d+分/.test(chips)) ok('経過時間が出る（60分枠のペース配分用）'); else bad('経過時間が出ていない：' + chips);
 
 console.log('\n########## 4. 書き出した zip ##########');
 const dl = page.waitForEvent('download');

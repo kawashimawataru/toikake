@@ -54,7 +54,7 @@ export const MIN_ANSWER_SPEECH_S = 0.8;   // 「答えた」とみなすのに�
 export const ANSWER_END_SILENCE_S = 2.5;  // 話し終わってこれだけ黙ったら終了
 export const DESCRIBING_SHORT_S = 5;      // 描写がこれ未満なら追い問いを出す
 export const FOLLOW_UP_CHOICE_S = 20;     // チップを待つ上限
-export const FOLLOW_UP_SHOT_S = 120;      // 2枚目を待つ上限
+export const FOLLOW_UP_SHOT_S = 60;       // 2枚目を待つ上限（磯は対象が足元。60分しかない）
 
 export const iso = d => new Date(d).toISOString();
 export const uuid = () =>
