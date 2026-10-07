@@ -42,6 +42,24 @@ function log(type, capture, detail = '') {
 }
 async function save() { await Store.putSession(app.session); }
 
+// ---- 答え方の設定（2026-10、comfort-proto）---------------------------------------
+// 読み上げ：問いを音声合成で流すと、読み終わるまで答えられない（B の1枚で約20秒）。
+//   同じ言葉を文字と音声で重ねると理解が下がる（Mayer の冗長性原理）。撮影直後は画面を見ているので、
+//   既定はオフにして文字だけ出し、すぐ録音を始める。
+// 軽い版：1枚あたりの声の問いを「なんで」1つにし、分類は1タップ（engine.js の STAGES.L）。
+// どちらも session.json に tts_enabled / light_mode で残す。解析では必ず分けること。
+// 古い記録（この2つが無い）は、読み上げあり・軽い版なし として扱う。
+const Prefs = {
+  get(k, d) { try { const v = localStorage.getItem('pref_' + k); return v === null ? d : v === '1'; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('pref_' + k, v ? '1' : '0'); } catch (e) {} },
+};
+const ttsOn = () => !app.session || app.session.tts_enabled !== false;
+const lightOn = () => !!(app.session && app.session.light_mode);
+function renderPrefs() {
+  $('ttsToggle').textContent = `読み上げ：${Prefs.get('tts', false) ? 'オン' : 'オフ'}`;
+  $('lightToggle').textContent = `軽い版：${Prefs.get('light', true) ? 'オン' : 'オフ'}`;
+}
+
 // ---- 読み上げ ---------------------------------------------------------------
 // 屋外の騒音と、他の学生への聞こえ方の両面から、音声と画面表示を併用する。
 function speak(text) {
@@ -133,20 +151,24 @@ function paintMeter(db) {
 //   ・本人が「話し終わった」を押したら、VAD が何と言っていても回答として保存する
 async function ask(stage, captureID, mission, override) {
   const text = override || (stage === 'hidden' ? mission.q3 : E.STAGE_TEXT[stage]);
-  const lim = E.limitsFor(stage);
+  const lim0 = E.limitsFor(stage);
+  // 軽い版では、黙ったまま待つ時間を短くする。答えない自由を軽くする（すぐ次へ進む）。
+  const lim = lightOn() ? { ...lim0, noSpeech: Math.min(lim0.noSpeech, E.LIGHT_NO_SPEECH_S) } : lim0;
   $('stageLabel').textContent =
     stage === 'hidden' ? `お題「${mission.name}」の質問` : (E.STAGE_LABEL[stage] || stage);
   $('question').textContent = text;
   show('prompt');
 
-  $('recText').textContent = '読み上げ中…';
   $('recDot').className = 'dot off';
   $('done').disabled = true; $('again').disabled = true;
   app.dismissed = false;
 
-  app.meter.vad.setSuppressed(true);
-  await speak(text);
-  app.meter.vad.setSuppressed(false);
+  if (ttsOn()) {
+    $('recText').textContent = '読み上げ中…';
+    app.meter.vad.setSuppressed(true);
+    await speak(text);
+    app.meter.vad.setSuppressed(false);
+  }
   if (app.dismissed) return { kind: 'dismissed' };
 
   const path = `audio/${captureID}_${stage}.${app.ext}`;
@@ -338,9 +360,11 @@ async function runFollowUp(baseID, mission) {
   $('shutterBox').style.display = 'none';
   $('suggestBox').style.display = '';
   show('capture');
-  app.meter.vad.setSuppressed(true);
-  await speak(fu.suggestion);
-  app.meter.vad.setSuppressed(false);
+  if (ttsOn()) {
+    app.meter.vad.setSuppressed(true);
+    await speak(fu.suggestion);
+    app.meter.vad.setSuppressed(false);
+  }
 
   while (!app.pendingFollowUp.shotID && !app.followSkip) {
     await sleep(200);
@@ -364,6 +388,25 @@ async function runFollowUp(baseID, mission) {
     base.follow_up_declined = true;
     log('follow_up_declined', baseID, `type=${fu.type} reason=${app.followSkip ? 'user' : 'timeout'}`);
   }
+  await save();
+}
+
+// ---- 分類の1タップ（軽い版）--------------------------------------------------
+// 4択で済む問いを声で答えさせない（μEMA）。答えは answers ではなく self_class に入れる。
+// answers は音声つきの回答だけ（analysis/transcribe.py・report.py の入力の約束を崩さない）。
+async function askClass(captureID) {
+  const shownAt = performance.now();
+  let picked = null, skipped = false;
+  $('classList').innerHTML = E.CLASS_CHOICES.map(c => `<button data-c="${c}">${c}</button>`).join('');
+  for (const b of $('classList').querySelectorAll('button')) b.onclick = () => { picked = b.dataset.c; };
+  $('skipClass').onclick = () => { skipped = true; };
+  show('classify');
+  while (!picked && !skipped && performance.now() - shownAt < E.CLASS_TAP_S * 1000) await sleep(100);
+  const cap = app.session.captures.find(c => c.capture_id === captureID);
+  const ms = Math.round(performance.now() - shownAt);
+  cap.self_class = picked ? { value: picked, by: 'tap', ms } : null;
+  log(picked ? 'self_class' : 'self_class_skipped', captureID,
+    picked ? `value=${picked} ms=${ms}` : `reason=${skipped ? 'user' : 'timeout'}`);
   await save();
 }
 
@@ -398,7 +441,8 @@ async function onShutter() {
     const path = `photos/${captureID}.jpg`;
     await Store.putBlob(path, file);
 
-    const set = E.setForIndex(shutterCount());
+    // 軽い版は A/B の交互に入らない（L）。交互を崩さないよう、通し番号は軽い版でも数えない。
+    const set = lightOn() ? 'L' : E.setForIndex(shutterCount());
     const capture = {
       capture_id: captureID, captured_at: E.iso(at), photo: path, trigger: 'shutter',
       location: null,
@@ -418,6 +462,7 @@ async function onShutter() {
     renderStatus();
 
     const mission = app.mission;
+    if (lightOn()) await askClass(captureID);
     const r = await runCapture(capture, mission);
 
     // もう1ターン。「なぜ」まで答えた写真だけ。拒否された撮影には重ねない。
@@ -609,9 +654,13 @@ async function begin() {
     // ラリー（Gemini で追い問いを生成／もう1ターンの型を自動判定）を使った区間か。
     // 使った写真は問いの出方が定型と違うので、解析では必ず分けること。
     rally_enabled: Rally.active,
+    // 答え方の設定（2026-10）。問いの出方が違うので、解析では必ず分けること。
+    tts_enabled: Prefs.get('tts', false),
+    light_mode: Prefs.get('light', true),
     captures: [], events: [],
   };
-  log('session_start', null, `app=web mime=${app.mime} rally=${Rally.active ? 'on' : 'off'}`);
+  log('session_start', null, `app=web mime=${app.mime} rally=${Rally.active ? 'on' : 'off'}`
+    + ` tts=${app.session.tts_enabled ? 'on' : 'off'} light=${app.session.light_mode ? 'on' : 'off'}`);
   await save();
   renderStatus(); renderMission();
   startClock();
@@ -637,6 +686,9 @@ async function endSession() {
   $('pid').onchange = () => localStorage.setItem('participant_id', $('pid').value);
 
   $('rallyToggle').onclick = () => { Rally.on = !Rally.on; renderRallyRow(); };
+  $('ttsToggle').onclick = () => { Prefs.set('tts', !Prefs.get('tts', false)); renderPrefs(); };
+  $('lightToggle').onclick = () => { Prefs.set('light', !Prefs.get('light', true)); renderPrefs(); };
+  renderPrefs();
   $('start').onclick = begin;
   $('resume').onclick = resume;
   renderResumeRow(await findUnfinished());

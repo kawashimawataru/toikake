@@ -24,6 +24,14 @@ export const STAGES = {
 };
 export const setForIndex = i => (i % 2 === 0 ? 'A' : 'B');
 
+// 軽い版（2026-10。河島「音声で流すのがだれる」）。1枚あたりの声の問いを「なんで」1つに絞る。
+// 長い質問票は負担を増やし回答の量と質を下げるが、頻度は下げなくてよい（Eisele ら 2022）。
+// 分類は声ではなく1タップ（μEMA：1問1タップなら平均5.4秒）。L は A/B の交互に入らない。
+STAGES.L = ['understanding'];
+export const CLASS_CHOICES = ['生き物', 'もの', '風景', '文字'];
+export const CLASS_TAP_S = 8;            // 分類のタップを待つ上限。選ばなければ飛ばして本題へ
+export const LIGHT_NO_SPEECH_S = 8;      // 軽い版で、黙ったまま待つ上限（既定20秒）。断る負担を軽く（Amershi G8）
+
 // 段階ごとの時間（秒）。分類だけ短い。
 export const LIMITS = {
   classify:       { noSpeech:  8, max: 10 },

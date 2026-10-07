@@ -69,9 +69,18 @@ const browser = await chromium.launch({ ...LAUNCH, channel: 'chrome' })
 const ctx = await browser.newContext({ permissions: ['microphone'], acceptDownloads: true });
 await ctx.grantPermissions(['microphone'], { origin: base.slice(0, -1) });
 // 読み上げは headless に声が無く返ってこないので、待たずに進める
-await ctx.addInitScript(() => {
-  window.speechSynthesis = { speak: u => setTimeout(() => u.onend && u.onend(), 10), cancel: () => {} };
-});
+// MODE=light で軽い版（読み上げオフ・1枚に声の問い1つ・分類は1タップ）を通す。
+// 既定は 9/22 に使った旧設定（読み上げあり・A/B 交互）で、これまでの検査をそのまま通す。
+const MODE = process.env.MODE || 'legacy';
+const spoken = [];
+await ctx.exposeFunction('__spoken', t => spoken.push(t));
+await ctx.addInitScript(mode => {
+  window.speechSynthesis = { speak: u => { if (u.text) window.__spoken(u.text); setTimeout(() => u.onend && u.onend(), 10); }, cancel: () => {} };
+  if (!localStorage.getItem('pref_tts')) {
+    localStorage.setItem('pref_tts', mode === 'light' ? '0' : '1');
+    localStorage.setItem('pref_light', mode === 'light' ? '1' : '0');
+  }
+}, MODE);
 const page = await ctx.newPage();
 const errors = [];
 const expected = u => u.includes('/api/rally') && RALLY === 'off';   // 無いことを確かめている
@@ -136,11 +145,72 @@ async function answerOne() {
   return q;
 }
 
+/** 軽い版：分類1タップ → 「なんで」1問 → もう1枚 → 記録と書き出しまで。終わったら抜ける。 */
+async function runLight() {
+  console.log('\n########## 2L. 軽い版（読み上げオフ・分類は1タップ・声の問い1つ）##########');
+  const t0 = Date.now();
+  await shoot('#shutter');
+  await page.waitForSelector('#classify.on', { timeout: 5000 });
+  ok(`撮影の直後に分類の1タップが出た（${Date.now() - t0}ms）`);
+  await page.click('#classList [data-c="生き物"]');
+  const q = await answerOne();
+  if (q.includes('なんで')) ok('声の問いは「なんで、それが気になった？」だけ'); else bad('最初の声の問いが違う：' + q);
+  const recStart = await page.textContent('#recText');
+  await page.waitForSelector('#chips.on', { timeout: 10000 });
+  ok('「なんで」1問の後に、すぐ「もう1枚」のチップへ進んだ');
+  await page.click('[data-t="size"]');
+  await page.waitForSelector('#suggestBox:visible', { timeout: 10000 });
+  await shoot('#shutter2');
+  const g = await answerOne();
+  if (g.includes('新しく分かった')) ok('2枚目の後の1問も出た'); else bad('2枚目の問いが違う：' + g);
+  if (spoken.length === 0) ok('読み上げは一度も流れていない（文字だけ）'); else bad('読み上げが流れた：' + spoken.join(' / '));
+
+  // 2枚目の写真：分類を選ばず、声も出さない → 早めに次へ進むこと（だれない）
+  await page.waitForSelector('#capture.on', { timeout: 10000 });
+  await shoot('#shutter');
+  await page.waitForSelector('#classify.on', { timeout: 5000 });
+  const tSkip = Date.now();
+  await page.waitForSelector('#capture.on', { timeout: 30000 });
+  const waited = (Date.now() - tSkip) / 1000;
+  if (waited < 20) ok(`何も選ばず黙っていたら ${waited.toFixed(1)} 秒で撮影画面に戻った（旧設定は約34秒：読み上げ約6秒＋無言の待ち28秒）`);
+  else bad(`黙っていると戻るまで長い：${waited.toFixed(1)}秒`);
+
+  await page.click('#endSession');
+  await page.waitForSelector('#review.on', { timeout: 10000 });
+  const s = await page.evaluate(async () => {
+    const db = await new Promise(r => { const q = indexedDB.open('toikake'); q.onsuccess = () => r(q.result); });
+    return new Promise(r => { const q = db.transaction('sessions').objectStore('sessions').getAll(); q.onsuccess = () => r(q.result[0]); });
+  });
+  if (s.tts_enabled === false && s.light_mode === true) ok('tts_enabled=false / light_mode=true が JSON に出る（解析で分けられる）');
+  else bad('設定が JSON に出ていない');
+  const [c1, c2, c3] = s.captures;
+  if (c1.prompt.question_set === 'L' && c3.prompt.question_set === 'L') ok('軽い版の写真は question_set=L（A/B に混ざらない）');
+  else bad('question_set が L でない：' + s.captures.map(c => c.prompt.question_set).join(','));
+  if (c1.self_class && c1.self_class.value === '生き物' && c1.self_class.by === 'tap') ok('分類は self_class に1タップで残る：' + JSON.stringify(c1.self_class));
+  else bad('self_class が残っていない');
+  if (c1.answers.every(a => a.audio && typeof a.duration_s === 'number')) ok('answers は音声つきの回答だけ（解析の入力の約束を崩していない）');
+  else bad('answers に音声の無い項目が混ざった');
+  if (c2.follow_up_of === c1.capture_id && c2.follow_up_type === 'size') ok('もう1枚は今までどおり記録される');
+  else bad('もう1枚の記録が違う');
+  if (!c3.self_class && s.events.some(e => e.type === 'self_class_skipped')) ok('選ばなかった分類は self_class_skipped として残る');
+  else bad('飛ばした分類が残っていない');
+  const dl = page.waitForEvent('download');
+  await page.click('#export');
+  if (process.env.KEEP_ZIP) await (await dl).saveAs(process.env.KEEP_ZIP); else await dl;
+  ok('書き出せた');
+  if (errors.length) bad('実行中に JS エラー:\n       ' + errors.join('\n       ')); else ok('通しでJSエラーなし');
+  await browser.close(); server.close();
+  console.log('\n' + (fails ? `失敗 ${fails} 件` : 'すべて通過'));
+  process.exit(fails ? 1 : 0);
+}
+
 async function shoot(sel) {
   const chooser = page.waitForEvent('filechooser');
   await page.click(sel);
   (await chooser).setFiles(PHOTO);
 }
+
+if (MODE === 'light') await runLight();   // 軽い版はここで別の流れを通して終わる
 
 // 1枚目（通し番号 0 → セット A：分類・気づき・理由）
 await shoot('#shutter');
